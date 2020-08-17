@@ -277,22 +277,10 @@ def main(_):
           per_host_input_for_training=is_per_host))
 
 
-  model_fn = squad_utils.v1_model_fn_builder(
-      albert_config=albert_config,
-      init_checkpoint=FLAGS.init_checkpoint,
-      learning_rate=FLAGS.learning_rate,
-      num_train_steps=num_train_steps,
-      num_warmup_steps=num_warmup_steps,
-      use_tpu=FLAGS.use_tpu,
-      use_one_hot_embeddings=FLAGS.use_tpu,
-      use_einsum=FLAGS.use_einsum,
-      hub_module=FLAGS.albert_hub_module_handle)
-
   # If TPU is not available, this will fall back to normal Estimator on CPU
   # or GPU.
   estimator = contrib_tpu.TPUEstimator(
       use_tpu=FLAGS.use_tpu,
-      model_fn=model_fn,
       config=run_config,
       train_batch_size=FLAGS.train_batch_size,
       predict_batch_size=FLAGS.predict_batch_size)
