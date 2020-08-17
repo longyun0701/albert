@@ -190,10 +190,7 @@ def validate_flags_or_throw(albert_config):
     err_msg = "At least one of `do_train` or `do_predict` or `export_dir`" + "must be True."
     raise ValueError(err_msg)
 
-  if FLAGS.do_train:
-    if not FLAGS.train_file:
-      raise ValueError(
-          "If `do_train` is True, then `train_file` must be specified.")
+
   if FLAGS.do_predict:
     if not FLAGS.predict_file:
       raise ValueError(
@@ -279,20 +276,6 @@ def main(_):
           num_shards=FLAGS.num_tpu_cores,
           per_host_input_for_training=is_per_host))
 
-  train_examples = None
-  num_train_steps = None
-  num_warmup_steps = None
-  if FLAGS.do_train:
-    train_examples = squad_utils.read_squad_examples(
-        input_file=FLAGS.train_file, is_training=True)
-    num_train_steps = int(
-        len(train_examples) / FLAGS.train_batch_size * FLAGS.num_train_epochs)
-    num_warmup_steps = int(num_train_steps * FLAGS.warmup_proportion)
-
-    # Pre-shuffle the input to avoid having to make a very large shuffle
-    # buffer in in the `input_fn`.
-    rng = random.Random(12345)
-    rng.shuffle(train_examples)
 
   model_fn = squad_utils.v1_model_fn_builder(
       albert_config=albert_config,
@@ -314,40 +297,6 @@ def main(_):
       train_batch_size=FLAGS.train_batch_size,
       predict_batch_size=FLAGS.predict_batch_size)
 
-  if FLAGS.do_train:
-    # We write to a temporary file to avoid storing very large constant tensors
-    # in memory.
-
-    if not tf.gfile.Exists(FLAGS.train_feature_file):
-      train_writer = squad_utils.FeatureWriter(
-          filename=os.path.join(FLAGS.train_feature_file), is_training=True)
-      squad_utils.convert_examples_to_features(
-          examples=train_examples,
-          tokenizer=tokenizer,
-          max_seq_length=FLAGS.max_seq_length,
-          doc_stride=FLAGS.doc_stride,
-          max_query_length=FLAGS.max_query_length,
-          is_training=True,
-          output_fn=train_writer.process_feature,
-          do_lower_case=FLAGS.do_lower_case)
-      train_writer.close()
-
-    tf.logging.info("***** Running training *****")
-    tf.logging.info("  Num orig examples = %d", len(train_examples))
-    # tf.logging.info("  Num split examples = %d", train_writer.num_features)
-    tf.logging.info("  Batch size = %d", FLAGS.train_batch_size)
-    tf.logging.info("  Num steps = %d", num_train_steps)
-    del train_examples
-
-    train_input_fn = squad_utils.input_fn_builder(
-        input_file=FLAGS.train_feature_file,
-        seq_length=FLAGS.max_seq_length,
-        is_training=True,
-        drop_remainder=True,
-        use_tpu=FLAGS.use_tpu,
-        bsz=FLAGS.train_batch_size,
-        is_v2=False)
-    estimator.train(input_fn=train_input_fn, max_steps=num_train_steps)
 
   if FLAGS.do_predict:
     with tf.gfile.Open(FLAGS.predict_file) as predict_file:
@@ -460,57 +409,7 @@ def main(_):
       global_step = -1
       best_perf = -1
       checkpoint_path = None
-    while global_step < num_train_steps:
-      steps_and_files = {}
-      filenames = tf.gfile.ListDirectory(FLAGS.output_dir)
-      for filename in filenames:
-        if filename.endswith(".index"):
-          ckpt_name = filename[:-6]
-          cur_filename = os.path.join(FLAGS.output_dir, ckpt_name)
-          if cur_filename.split("-")[-1] == "best":
-            continue
-          gstep = int(cur_filename.split("-")[-1])
-          if gstep not in steps_and_files:
-            tf.logging.info("Add {} to eval list.".format(cur_filename))
-            steps_and_files[gstep] = cur_filename
-      tf.logging.info("found {} files.".format(len(steps_and_files)))
-      if not steps_and_files:
-        tf.logging.info("found 0 file, global step: {}. Sleeping."
-                        .format(global_step))
-        time.sleep(60)
-      else:
-        for ele in sorted(steps_and_files.items()):
-          step, checkpoint_path = ele
-          if global_step >= step:
-            if len(_find_valid_cands(step)) > 1:
-              for ext in ["meta", "data-00000-of-00001", "index"]:
-                src_ckpt = checkpoint_path + ".{}".format(ext)
-                tf.logging.info("removing {}".format(src_ckpt))
-                tf.gfile.Remove(src_ckpt)
-            continue
-          result, global_step = get_result(checkpoint_path)
-          tf.logging.info("***** Eval results *****")
-          for key in sorted(result.keys()):
-            tf.logging.info("  %s = %s", key, str(result[key]))
-            writer.write("%s = %s\n" % (key, str(result[key])))
-          if result[key_name] > best_perf:
-            best_perf = result[key_name]
-            for ext in ["meta", "data-00000-of-00001", "index"]:
-              src_ckpt = checkpoint_path + ".{}".format(ext)
-              tgt_ckpt = checkpoint_path.rsplit(
-                  "-", 1)[0] + "-best.{}".format(ext)
-              tf.logging.info("saving {} to {}".format(src_ckpt, tgt_ckpt))
-              tf.gfile.Copy(src_ckpt, tgt_ckpt, overwrite=True)
-              writer.write("saved {} to {}\n".format(src_ckpt, tgt_ckpt))
-          writer.write("best {} = {}\n".format(key_name, best_perf))
-          tf.logging.info("  best {} = {}\n".format(key_name, best_perf))
 
-          if len(_find_valid_cands(global_step)) > 2:
-            for ext in ["meta", "data-00000-of-00001", "index"]:
-              src_ckpt = checkpoint_path + ".{}".format(ext)
-              tf.logging.info("removing {}".format(src_ckpt))
-              tf.gfile.Remove(src_ckpt)
-          writer.write("=" * 50 + "\n")
 
     checkpoint_path = os.path.join(FLAGS.output_dir, "model.ckpt-best")
     result, global_step = get_result(checkpoint_path)
